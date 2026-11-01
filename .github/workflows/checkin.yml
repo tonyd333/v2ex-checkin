@@ -1,0 +1,80 @@
+name: V2EX Daily Bonus
+
+# 独立的私有仓库版本（不是 fork），定时任务不会被 GitHub 默认禁用。
+#
+# 关键设计：
+#   1. v2ex_auto.py 为纯标准库实现，不装 uv、不装依赖、不下浏览器
+#   2. 支持 TOTP 两步验证：配置 V2EX_TOTP_SECRET 后自动生成验证码通过 /2fa
+#   3. cron 为北京 08:30 主任务 + 09:40 兜底（V2EX 在 8 点后才发当日奖励）
+#   4. 结果断言：签到失败时 workflow 变红，避免静默失效
+#
+# 保活：GitHub 会在仓库连续 60 天无提交后停用 scheduled workflow。
+#      收到提醒后在本仓库任意提交一次（或点 Run workflow）即可重置计时。
+
+on:
+  schedule:
+    # GitHub Actions 的 cron 按 UTC 解释，北京时间 = UTC + 8
+    - cron: '30 0 * * *'   # 北京 08:30  主任务
+    - cron: '40 1 * * *'   # 北京 09:40  兜底（已领取则直接跳过，无副作用）
+  workflow_dispatch:        # 手动触发
+  push:
+    branches: [master]      # 临时触发器：推送即运行，首次验证通过后移除
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2ex-daily
+  cancel-in-progress: false
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      V2EX_COOKIES: ${{ secrets.V2EX_COOKIES }}
+      V2EX_TOTP_SECRET: ${{ secrets.V2EX_TOTP_SECRET }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Show runner time
+        run: |
+          sudo timedatectl set-timezone Asia/Shanghai
+          date '+%Y-%m-%d %H:%M:%S %Z'
+          python3 --version
+
+      - name: Check-in
+        run: |
+          set -o pipefail
+          python3 ./v2ex_auto.py | tee /tmp/checkin.log
+
+      - name: Verify result
+        run: |
+          set -euo pipefail
+          LOG=/tmp/checkin.log
+
+          if grep -qE '两[步步]验证失败|需要两[步步]验证' "$LOG"; then
+            echo "::error::两步验证未通过。请核对 V2EX_TOTP_SECRET 与当前绑定的密钥是否一致，以及验证器时间是否准确"
+            exit 1
+          fi
+
+          if grep -qE 'Cookie 可能已经失效|Cookie 中没有 A2|未配置 V2EX_COOKIES|无法获取 once' "$LOG"; then
+            echo "::error::登录态无效。最可能是 A2 Cookie 已过期，请重新导出完整的请求头 Cookie 更新 V2EX_COOKIES"
+            exit 1
+          fi
+
+          if grep -qE '签到失败|无法连接网站|签到可能失败' "$LOG"; then
+            echo "::error::签到请求失败。常见原因：Cloudflare 拦截了 runner 的机房 IP，或未到发奖时间（需北京时间 8 点之后）"
+            exit 1
+          fi
+
+          if grep -qE '签到成功|今日已签到|无需重复签到|每日登录奖励已领取' "$LOG"; then
+            echo "::notice::V2EX 签到状态正常"
+            exit 0
+          fi
+
+          echo "::error::未识别到签到结果，请检查日志"
+          exit 1
