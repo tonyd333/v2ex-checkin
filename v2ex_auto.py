@@ -169,7 +169,25 @@ def solve_2fa(opener, url, html, secret):
     return False, "验证码被拒绝，请检查 TOTP 密钥与设备时间"
 
 
+def beijing_now():
+    """返回北京时间的 struct_time，不依赖 runner 的系统时区。
+
+    GitHub 的 runner 默认是 UTC，虽然 workflow 里用 timedatectl 改过，
+    但这里显式换算，避免因时区设置顺序变化而误判。
+    """
+    return time.gmtime(time.time() + 8 * 3600)
+
+
 def main():
+    # 时段保护：V2EX 在早上 8 点之后才发当日奖励。
+    # GitHub 的 schedule 可能延迟数小时，若把本应白天的运行推到了次日凌晨，
+    # 强行请求得到的是「今日奖励尚未开放」而不是错误。这种情况下应当跳过，
+    # 而不是让断言把它判定为签到失败（否则会产生一次无意义的红色告警）。
+    now = beijing_now()
+    if now.tm_hour < 8:
+        add("运行信息", f"北京时间 {now.tm_hour:02d}:{now.tm_min:02d}，未到发奖时段，跳过本次运行")
+        return
+
     raw = os.environ.get("V2EX_COOKIES", "").strip()
     secret = os.environ.get("V2EX_TOTP_SECRET", "").strip()
 
