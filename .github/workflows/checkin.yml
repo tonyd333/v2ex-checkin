@@ -13,9 +13,16 @@ name: V2EX Daily Bonus
 
 on:
   schedule:
-    # GitHub Actions 的 cron 按 UTC 解释，北京时间 = UTC + 8
-    - cron: '30 0 * * *'   # 北京 08:30  主任务
-    - cron: '40 1 * * *'   # 北京 09:40  兜底（已领取则直接跳过，无副作用）
+    # GitHub Actions 的 cron 一律按 UTC 解释（北京时间 = UTC + 8）。
+    # 实测依据：旧仓库 cron 为 00:30 UTC，实际在 06:34 UTC 才执行（延迟 6h4m3s）。
+    #
+    # 因此不再依赖单一时间点，改为北京时间 08:30 ~ 22:30 每小时一次，共 15 次。
+    # 脚本是幂等的：先读 /mission/daily，看到「每日登录奖励已领取」就立即退出，
+    # 不会重复请求 redeem。所以多次运行无副作用，只是多花几秒 runner 时间。
+    #
+    # 这样设计的收益：任何一次延迟或丢失都不影响当天结果，只要 15 次里有 1 次成功。
+    # 下限 08:30 不能更早 —— V2EX 在早上 8 点之后才发当日奖励。
+    - cron: '30 0-14 * * *'
   workflow_dispatch:        # 手动触发
 
 permissions:
