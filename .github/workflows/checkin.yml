@@ -17,8 +17,6 @@ on:
     - cron: '30 0 * * *'   # 北京 08:30  主任务
     - cron: '40 1 * * *'   # 北京 09:40  兜底（已领取则直接跳过，无副作用）
   workflow_dispatch:        # 手动触发
-  push:
-    branches: [master]      # 临时触发器：推送即运行，首次验证通过后移除
 
 permissions:
   contents: read
