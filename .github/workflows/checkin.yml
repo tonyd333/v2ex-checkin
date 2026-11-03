@@ -1,34 +1,36 @@
 name: V2EX Daily Bonus
 
-# 独立的私有仓库版本（不是 fork），定时任务不会被 GitHub 默认禁用。
+# 私有仓库版本，签到脚本为纯标准库实现（v2ex_auto.py），无第三方依赖。
 #
-# 关键设计：
-#   1. v2ex_auto.py 为纯标准库实现，不装 uv、不装依赖、不下浏览器
-#   2. 支持 TOTP 两步验证：配置 V2EX_TOTP_SECRET 后自动生成验证码通过 /2fa
-#   3. cron 为北京 08:30 主任务 + 09:40 兜底（V2EX 在 8 点后才发当日奖励）
-#   4. 结果断言：签到失败时 workflow 变红，避免静默失效
+# ── 调度时间的选择依据（实测，不是推测）──────────────────────────
+# GitHub Actions 的 cron 按 UTC 解释，且 scheduled workflow 在高负载时
+# 会被延迟甚至丢弃（官方文档：high load times include the start of every hour,
+# if the load is sufficiently high enough, some queued jobs may be dropped）。
 #
-# 保活：GitHub 会在仓库连续 60 天无提交后停用 scheduled workflow。
-#      收到提醒后在本仓库任意提交一次（或点 Run workflow）即可重置计时。
+# 实测数据（北京时间）：
+#   UTC 00:30 = 北京 08:30  → 11/2 未执行、11/3 未执行（被丢弃）；旧 fork 延迟 6h04m
+#   UTC 01:40 = 北京 09:40  → 旧 fork 延迟 7h26m
+#   UTC 06:30 = 北京 14:30  → 准点执行，仅差 1 分钟
+#
+# 结论：UTC 00:00-02:00 是全球用户集中排「每天零点」任务的峰值区间，
+#      把签到放在这里必然被丢弃或严重延迟。因此主任务改到 UTC 06:30 之后。
+#
+# 现配置：UTC 06:30 / 12:30 → 北京 14:30 / 20:30。
+# V2EX 的每日奖励全天可领，下午执行不会损失任何奖励。
+# ──────────────────────────────────────────────────────────────
+#
+# 保活：每次运行会把结果写入 logs/YYYY-MM.md 并提交，
+#      因此仓库每天都有提交，不会触发「60 天无活动自动停用」。
 
 on:
   schedule:
-    # GitHub Actions 的 cron 一律按 UTC 解释（北京时间 = UTC + 8）。
-    # 实测依据：旧仓库 cron 为 00:30 UTC，实际在 06:34 UTC 才执行（延迟 6h4m3s），
-    # 且两次延迟量不同（4m3s 与 26m9s 的零头无法由任何时区偏移产生）→ 确认是调度延迟。
-    #
-    # 每天两次：
-    #   UTC 00:30 → 北京 08:30  主任务（8 点发奖后的第一条）
-    #   UTC 06:30 → 北京 14:30  兜底
-    #
-    # 兜底选 14:30 而不是更晚，是为了给延迟留余量：
-    # 即使延迟 8 小时 36 分（实测最大值），14:30 + 8h36m = 23:06，仍在当天有效。
-    # 若兜底放到 16:30，同样的延迟就会跨到次日凌晨而失效。
-    - cron: '30 0,6 * * *'
+    - cron: '30 6,12 * * *'
   workflow_dispatch:        # 手动触发
 
+# 需要 contents: write 才能把运行记录提交回仓库。
+# 本 workflow 不响应 pull_request，外部无法注入代码，权限风险可控。
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: v2ex-daily
@@ -46,11 +48,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0        # 写日志后要 rebase + push，需要完整历史
 
       - name: Show runner time
         run: |
           sudo timedatectl set-timezone Asia/Shanghai
-          date '+%Y-%m-%d %H:%M:%S %Z'
+          echo "触发时间(北京): $(date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "触发事件: ${GITHUB_EVENT_NAME}"
           python3 --version
 
       - name: Check-in
@@ -74,7 +79,7 @@ jobs:
           fi
 
           if grep -qE '签到失败|无法连接网站|签到可能失败' "$LOG"; then
-            echo "::error::签到请求失败。常见原因：Cloudflare 拦截了 runner 的机房 IP，或未到发奖时间（需北京时间 8 点之后）"
+            echo "::error::签到请求失败。常见原因：Cloudflare 拦截了 runner 的机房 IP"
             exit 1
           fi
 
@@ -90,3 +95,43 @@ jobs:
 
           echo "::error::未识别到签到结果，请检查日志"
           exit 1
+
+      # 把本次结果追加到月度日志并提交回仓库。
+      # 目的：让运行情况可以从仓库直接读取，不必依赖 Actions 网页；
+      #      同时使仓库每天都有提交，自动规避 60 天停用规则。
+      # 注意：本 workflow 不能加 push 触发器，否则日志提交会导致无限循环。
+      - name: Record result
+        if: always()
+        run: |
+          set -uo pipefail
+          STAMP=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+          MONTH=$(TZ=Asia/Shanghai date '+%Y-%m')
+          mkdir -p logs
+          {
+            echo "## ${STAMP}（北京）  事件=${GITHUB_EVENT_NAME}"
+            echo ""
+            echo '```'
+            cat /tmp/checkin.log 2>/dev/null || echo "(本次无日志)"
+            echo '```'
+            echo ""
+          } >> "logs/${MONTH}.md"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "logs/${MONTH}.md"
+          if git diff --cached --quiet; then
+            echo "日志无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "log: ${STAMP} 签到运行记录"
+
+          for i in 1 2 3; do
+            if git push; then
+              echo "运行记录已推送: logs/${MONTH}.md"
+              exit 0
+            fi
+            echo "推送失败，第 ${i} 次重试..."
+            git pull --rebase --autostash || true
+            sleep 3
+          done
+          echo "::warning::日志推送失败（不影响签到本身）"
