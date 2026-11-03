@@ -25,7 +25,10 @@ name: V2EX Daily Bonus
 
 on:
   schedule:
-    - cron: '30 6 * * *'
+    # 分钟用 17 而不是 0 或 30：GitHub 在整点和半点集中处理定时任务，
+    # 偏门分钟被服务的速度更快（社区实测经验，也符合官方「high load times
+    # include the start of every hour」的说明）。
+    - cron: '17 6 * * *'
   workflow_dispatch:        # 手动触发
 
 # 需要 contents: write 才能把运行记录提交回仓库。
