@@ -29,7 +29,7 @@ on:
     # GitHub 官方文档：By default, scheduled workflows run in UTC.
     #                  You can optionally specify a timezone using an IANA timezone string.
     # cron 直接写本地时间 14:17，由 timezone 字段声明时区。
-    - cron: '17 14 * * *'
+    - cron: '18 14 * * *'
       timezone: "Asia/Shanghai"
   workflow_dispatch:        # 手动触发
 
