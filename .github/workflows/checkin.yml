@@ -25,12 +25,16 @@ name: V2EX Daily Bonus
 
 on:
   schedule:
-    # 显式指定时区，不再依赖「默认 UTC」心算换算。
-    # GitHub 官方文档：By default, scheduled workflows run in UTC.
-    #                  You can optionally specify a timezone using an IANA timezone string.
-    # cron 直接写本地时间 14:17，由 timezone 字段声明时区。
-    - cron: '18 14 * * *'
-      timezone: "Asia/Shanghai"
+    # 实测结论（11-06 ~ 11-12 共 7 次 schedule 运行）：
+    #   配成 '18 14' + timezone: "Asia/Shanghai" 时，实际执行落在 UTC 13:00 ~ 16:19，
+    #   围绕 14:18 UTC 波动（-1h18m ~ +2h01m）。若 timezone 生效，应围绕 06:18 UTC
+    #   波动。因此判定：timezone 字段被忽略，cron 仍按 UTC 解释。
+    #   同时观察到延迟已从早期的 8 小时降到 1~2 小时，说明早期那 8 小时是改配置后的
+    #   调度器调试期表现，不是固定偏移。
+    #
+    # 所以直接用 UTC 写死：06:18 UTC = 北京 14:18。
+    # 按当前延迟水平，实际执行会落在北京 12:18 ~ 16:18，覆盖需求时段。
+    - cron: '18 6 * * *'
   workflow_dispatch:        # 手动触发
 
 # 需要 contents: write 才能把运行记录提交回仓库。
